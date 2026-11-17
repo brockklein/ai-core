@@ -139,6 +139,15 @@ You should also consider yourself responsible for making sure things stay clean.
 
 # Reference
 
+## Unattended runs
+
+When the human requesting the work is away, such as overnight:
+
+- work one issue at a time
+- wait out a usage limit rather than stop
+- collect questions in a scratch file outside the repo, keep working on what they don't block, and hand them over together
+- after any long wait on a pull request or CI, read its state directly; a watch that wakes only when the overall result changes can stay silent behind a check that was already red
+
 ## Allocating environments
 
 Allocate by what verification does, not only by which paths changed.
