@@ -6,7 +6,7 @@
 
 ## In short
 
-This repo packages an approach that was built and refined across two production projects: a web and mobile product, and a cross-platform app with a sync backend. One agent coordinates, and other agents plan, write, review, and test the work. Each agent runs in its own isolated environment, so many changes can move forward in parallel on one machine.
+This repo sets out standards for a codebase where AI agents do most of the work. One agent coordinates, and other agents plan, write, review, and test the work. Each agent runs in its own isolated environment, so many changes can move forward in parallel on one machine.
 
 The approach has five parts:
 
@@ -136,7 +136,7 @@ We recommend [T3 Code](https://t3.codes) as the harness. It dispatches agents ac
 - [Tools for agents](guides/tools.md): the ladder, guardrails, hooks, checks, MCP servers, and wizards.
 - [Environments for parallel work](guides/environments.md): worktrees, the environment manager, and the shared-resources list.
 - [Skills](guides/skills.md): what each skill does, and how to fill the templates.
-- [Orchestration](guides/orchestration.md): the roles, the seven steps, and what we learned running them.
+- [Orchestration](guides/orchestration.md): the roles, the seven steps, and the practices for running them.
 - [The harness](guides/harness.md): why T3 Code, and how to use another harness.
 
 ## Adopting it
