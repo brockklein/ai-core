@@ -30,7 +30,11 @@
       "Bash(git push --mirror*)",
       "Bash(git push * --mirror*)",
       "Bash(git -C * push --mirror*)",
-      "Bash(git -C * push * --mirror*)"
+      "Bash(git -C * push * --mirror*)",
+      "Bash(git push --no-verify*)",
+      "Bash(git push * --no-verify*)",
+      "Bash(git -C * push --no-verify*)",
+      "Bash(git -C * push * --no-verify*)"
     ],
     "ask": [
       "Bash(FILL: your production promotion command, e.g. tooling/promote.sh production*)"

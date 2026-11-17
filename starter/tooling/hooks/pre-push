@@ -36,8 +36,8 @@
 #     so keep every pre-push ref check in this one script.
 #
 # What gets past it, on purpose or not:
-#   - `git push --no-verify` (and LEFTHOOK=0 under lefthook) skips all hooks. It stays allowed so
-#     a person can bypass the hooks deliberately.
+#   - `git push --no-verify` (and LEFTHOOK=0 under lefthook) skips all hooks. Block --no-verify
+#     in each agent's permission rules; .claude/settings.json does for Claude Code.
 #   - `git push --mirror` from a clone with no local copy of a protected branch: git leaves that
 #     implicit delete off stdin, and a hook cannot tell that clone from a normal one. The deny
 #     rules block --mirror.

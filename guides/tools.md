@@ -46,7 +46,7 @@ When an agent stumbles, take the first rung that works:
 
 ### Guardrails beyond hooks
 
-- **Harness permissions.** `starter/.claude/settings.json` denies the common spellings of a push to the protected branch and of `--mirror`, and asks before a production promotion. These rules add to the git hook and to server-side branch protection, and replace neither: a bare `git push` names no branch, and Codex has no deny rules. They leave `--no-verify` allowed, so a person can bypass the hooks on purpose. Server-side branch protection is the backstop.
+- **Harness permissions.** `starter/.claude/settings.json` denies the common spellings of a push to the protected branch and of `--mirror` and `--no-verify`, and asks before a production promotion. These rules add to the git hook and to server-side branch protection, and replace neither: a bare `git push` names no branch, and Codex has no deny rules.
 - **Hooks are scripts, not lefthook commands.** Lefthook silently skips a pre-push *command* when HEAD has no diff against its upstream, so `git push origin <sha>:main` would pass. The pre-push hook runs as a script for that reason.
 - **Check at the moment of risk.** The pre-push hook runs the full check before a push to the integration branch. Running CI only at promotion, not on every push, is one option if CI minutes are scarce. The local gate then carries the load, so keep it strict and fast.
 
