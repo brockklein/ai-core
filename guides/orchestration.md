@@ -38,7 +38,7 @@ The coordinator copies a checklist into its reply and keeps it current. Steps 2 
 - **Context lands through a person.** The context pull request is opened before the code rebases. Code that depends on a context change waits for the merge, so the code's checks run against the context it will ship with.
 - **Leave the machine as you found it.** Teardown is a step with a check, and it deletes branches too.
 
-## What we learned running it
+## Practices for running it
 
 - **Tear down attempts only after synthesis is applied.** The base implementer may need to read code from the other attempts.
 - **After synthesis, review findings go to the base implementer,** who owns the final change and every fix, including fixes to code taken from other attempts. The synthesizer has no review duties.
@@ -49,7 +49,6 @@ The coordinator copies a checklist into its reply and keeps it current. Steps 2 
 - **Fix it now.** Don't defer a fix in the hope that the agent working a later issue will notice the same problem.
 - **Define a sweeping scope with a command.** For a task like "review every file agents read", define the scope as a command (`git ls-files '*.md' .agents .claude .codex .mcp.json`), and require a report on every file. A hand-written list misses files.
 - **Before a cleanup, move live work state to the tracker.** A cleanup that deletes notes can delete the record of work in progress.
-- **A large context rewrite can waive separate context PRs, on conditions.** Agents read the new context as it lands, so splitting it slows the rewrite without adding review value. Each push must leave the integration branch consistent on its own, and a person reads the whole result at the end. Reinstate the rule, and its hook, when the rewrite ends.
 
 ## Filling the skill for your project
 

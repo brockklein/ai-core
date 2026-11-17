@@ -2,6 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "deny": [
+      "Bash(FILL: replace main in every rule below with the protected branch from tooling/repo.conf, then delete this entry)",
       "Bash(git push * main)",
       "Bash(git push * main *)",
       "Bash(git push * +main)",

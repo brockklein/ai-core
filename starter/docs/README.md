@@ -10,7 +10,7 @@ Decisions, constraints that span components, and traps the source alone does not
 
 <!-- FILL: One entry per file in docs/internals/. Write a file here only for a decision or trap that spans components. Local behavior belongs in a comment beside the code, and formulas belong to the code and its tests. -->
 
-- [[[FILL: Area]]](./internals/[[FILL: area]].md) — [[FILL: the topics it covers]].
+<!-- FILL: Entry shape: - [Local data](./internals/local-data.md) — sync rules and write validation, offline merges, and streaks. -->
 
 ## Runbooks
 

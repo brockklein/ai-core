@@ -20,6 +20,22 @@ Behind all five sits one rule, applied every time an agent stumbles: **eliminate
 
 `starter/` holds the files. Point your agent at this repo and ask it to set up your project. [ADOPTING.md](ADOPTING.md) is its procedure.
 
+## Principles and the reference implementation
+
+The principles below transfer to any project. The files in `starter/` are one implementation of them, built for an app with a database, a dev stack, and an issue tracker. Keep the principle and replace the mechanism when your project differs.
+
+| Principle | Reference implementation | What to provide your agents |
+| --- | --- | --- |
+| Always-loaded context stays small; the rest sits behind pointers | `AGENTS.md`, `docs/README.md` with read-when entries, directory `AGENTS.md` files | Every project |
+| Context changes are reviewed by a person | `context/<topic>` pull requests, refused on the integration branch by a hook | Every project |
+| A tool beats an instruction | The ladder, hooks, checks that refuse the wrong move | Every project |
+| Parallel agents can't break each other | `task-env` (ports, database copies, process groups), the worktree guard | Any project with a running stack or shared state |
+| Agents use the product, not only read the code | Drive skills for a browser and for simulators | Any project with a user-facing surface |
+| Work is specified and tracked outside the repo | The tracker skill, `start <KEY>`, automated status moves | Any project with an issue tracker |
+| Steps only a person can do are scripted for the person | The wizard library | Any project with third-party setup |
+| Review comes from a different lab's model | `delegate_task` to another provider | Any harness that can reach two labs |
+| A coordinator keeps the whole job in view | The orchestrate skill | Work big enough to split |
+
 ## What's in the box
 
 | Path | What it is |

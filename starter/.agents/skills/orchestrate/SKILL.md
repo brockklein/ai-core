@@ -90,7 +90,7 @@ Review and verification see only the synthesized change, never the separate atte
 
 ## 4. Review
 
-Delegate subagents to perform a multi-angle adversarial review of the changes. At least two of the angles should be Standards and Spec. You can choose to add additional angles as you see fit.
+Delegate subagents to perform a multi-angle adversarial review of the changes. Every review covers Standards, Spec, and Committed context. You can choose to add additional angles as you see fit.
 
 - **Standards:** does the code conform to this repo's documented coding standards?
 - **Spec:** does the code faithfully implement the originating issue / spec?

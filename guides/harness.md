@@ -21,7 +21,7 @@ The `orchestrate` skill in `starter/` names these tools directly, because tool n
 
 ## Using another harness
 
-The principles still hold. Map each capability to what your harness offers, and replace the T3 tool names in `starter/.agents/skills/orchestrate/SKILL.md` and the drive skills with yours.
+The principles still hold. Map each capability to what your harness offers, and replace every T3 tool name in the adopted files with yours: the orchestrate skill, the drive skills, and the review rule in `AGENTS.md`'s Workflow section.
 
 | Capability | T3 Code | Typical alternatives |
 | --- | --- | --- |
