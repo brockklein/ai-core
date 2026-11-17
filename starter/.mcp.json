@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tracker": {
+      "type": "http",
+      "url": "https://example.com/FILL:tracker-mcp"
+    },
+    "project-db": {
+      "command": "node",
+      "args": ["tooling/mcp/db-server.mjs"]
+    }
+  }
+}

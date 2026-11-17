@@ -1,0 +1,12 @@
+# The same servers and transports as .mcp.json (Claude Code's project MCP config).
+# tooling/check-mcp-parity.mjs fails when they differ.
+# FILL: replace both example servers with this project's, in both files. A tracker MCP lets agents
+# read and write issues; a database tool scoped to this checkout's own database lets them query
+# without credentials or the risk of reaching the wrong database. Delete what you don't use.
+
+[mcp_servers.tracker]
+url = "https://example.com/FILL:tracker-mcp"
+
+[mcp_servers.project-db]
+command = "node"
+args = ["tooling/mcp/db-server.mjs"]
