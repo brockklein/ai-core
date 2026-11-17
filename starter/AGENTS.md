@@ -1,27 +1,18 @@
-<!-- FILL: This is the template for the always-loaded agent context. Every line here costs context on every turn, so each one must change what an agent does. Read the writing-for-agents skill before you fill it. Replace every FILL marker; delete a section only when the project truly has nothing for it. Keep the section order: what the project is, terms, architecture, ways to cause problems, hit every surface, working locally, conventions, workflow, documentation and context, taste. Remove these FILL comments as you go. -->
+<!-- FILL: This is the template for the always-loaded agent context. Every line here costs context on every turn, so each one must change what every agent does. A line only some tasks need belongs in a doc behind docs/README.md, or in a directory's own AGENTS.md. Read the writing-for-agents skill before you fill it. Replace every FILL marker; delete a section only when the project truly has nothing for it. Keep the section order: what the project is, reading guidance, architecture, ways to cause problems, hit every surface, working locally, conventions, workflow, documentation and context, taste. Remove these FILL comments as you go. -->
 
 # [[FILL: project name]]
 
 [[FILL: One paragraph. What the product is and who it serves, the major parts and the stack of each (one clause per part), and who owns the project. If it replaces a legacy system, say where that system's behavior can be read.]]
 
-[`docs/README.md`](docs/README.md) indexes the docs. Before you change something foundational, read the `docs/internals/` file for its area.
+Read [`docs/README.md`](docs/README.md) at the start of each session and follow its reading guidance for your task.
+
+Read [`docs/glossary.md`](docs/glossary.md) at the start of each session.
 
 <!-- FILL (optional): A short note from the owner, in their own voice, on the values behind decisions, e.g. "I like simple systems. Do not preserve complexity because it exists. Fight scope creep." Keep it only if it changes how agents choose between options. Product non-negotiables (what users must always be able to rely on) can go here too. -->
 
-## Glossary
-
-The terms below resolve drift: one word with several meanings, or one thing with several names. Use the term, not its aliases. Before you coin a term, check [`docs/glossary.md`](docs/glossary.md), the long tail. Add a row there only when the repo already uses two names for one thing.
-
-<!-- FILL: Only the terms agents get wrong. Two shapes:
-- an overloaded word: "**worker** — say _job worker_ or _service worker_; never bare."
-- one thing with many names: "**play** — one completed game, a `game_plays` row. Avoid: session, attempt."
-Also define who "you", "we", and "user" are, when that is ambiguous. Start with five to ten entries and grow from real confusion. -->
-
-- [[FILL]]
-
 ## Architecture
 
-<!-- FILL: The decisions an agent must know before touching code, each as a bold lead-in and a few sentences: the data paths and which one a feature takes, the API contract and how it reaches clients (and the codegen command to run after changing it), auth, the entry points that must stay side-effect free, which env file is the source in local dev. Add a subsection per app only for rules that span the whole app (e.g. "use the existing UI primitives; never hand-roll a dialog"). Leave out what the code shows at a glance. -->
+<!-- FILL: Only the decisions every agent needs before touching any code, each as a bold lead-in and a few sentences: the data paths and which one a feature takes, and the API contract and how it reaches clients. Leave out what the code shows at a glance. Detail that only some tasks need (auth internals, a legacy migration) goes in a docs/internals/ file behind its index entry. Rules for one directory (e.g. "use the existing UI primitives; never hand-roll a dialog") go in that directory's own AGENTS.md, which agents load only when they work there. -->
 
 ## The ways to cause problems
 
@@ -50,7 +41,7 @@ The most common defect is a change that works on the path you tested and is miss
 
 ## Working locally
 
-- [[FILL: the task runner and how to list its tasks (e.g. "`mise tasks` lists them with their usage"). First-time setup is [Development](docs/operations/development.md).]]
+- [[FILL: the task runner and how to list its tasks (e.g. "`mise tasks` lists them with their usage"). ]]
 - In a worktree, run `[[FILL: task runner]] task -- up <name>` before anything touches a database: it gives the worktree its own ports, database copy, and services. `[[FILL: task runner]] dev:status` shows what runs where.
 - [[FILL: how to query the local database (ideally an MCP tool scoped to this checkout's database).]]
 - [[FILL: how to run one test, per language.]]

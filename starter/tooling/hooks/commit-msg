@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Git commit-msg hook: refuses a commit whose subject is not "<ISSUE-KEY>: ..." or
+# "<lowercase-area>: ...". The rules, and why, are in tooling/check-commit-subjects.sh.
+#
+# Install (pick one):
+#   git config core.hooksPath tooling/hooks          # uses this directory as-is
+#   lefthook:  commit-msg: { commands: { subject: { run: bash tooling/hooks/commit-msg {1} } } }
+#
+# Catching the subject here costs one retyped message; catching it at push time costs a rebase.
+# --no-verify skips it; the pre-push hook checks subjects again on a push to the integration
+# branch, and CI can run the range form on pull requests.
+set -euo pipefail
+exec bash "$(cd "$(dirname "$0")/.." && pwd)/check-commit-subjects.sh" --message-file "$1"

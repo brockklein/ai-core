@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# Git pre-push hook: the last local gate before agent work leaves the machine. Settings live in
+# tooling/repo.conf.
+#
+# Refuses:
+#   1. Any update of a PROTECTED_BRANCHES branch (main), deletes and force-pushes included, unless
+#      the ALLOW_PROTECTED_PUSH_VAR variable (ALLOW_PROTECTED_PUSH) is exactly 1. Only the
+#      promotion script sets it. This covers every agent on the machine, including ones with no
+#      permission-deny setting of their own.
+#   2. Context changes (CONTEXT_PATHS: Markdown, AGENTS.md, .claude/, .codex/, .mcp.json, ...)
+#      in any new commit pushed to INTEGRATION_BRANCH (dev). Context changes how every later
+#      agent behaves, so it lands through a `context/<topic>` branch and a PR a human reviews.
+#   3. A topic branch whose diff from the integration branch mixes context and code. Kept apart,
+#      the context PR gets a real review instead of hiding inside a code diff.
+#   4. On a push to INTEGRATION_BRANCH: a bad commit subject in the pushed commits
+#      (tooling/check-commit-subjects.sh), then a failing CHECK_COMMAND. The check runs only when
+#      every ref check passed.
+#
+# Install (pick one):
+#   git config core.hooksPath tooling/hooks
+#     Uses this directory as the hooks directory. Simplest; no tool needed.
+#   lefthook
+#     Wire it as a lefthook *script* with stdin, never as a `commands:` entry. Lefthook skips a
+#     pre-push command, with no error, when HEAD has no diff against its upstream, so
+#     `git push origin <sha>:main` from a clean branch would skip the command and reach main.
+#     Put a one-line wrapper at .lefthook/pre-push/guard.sh:
+#         exec bash tooling/hooks/pre-push "$@"
+#     and in lefthook.yml:
+#         pre-push:
+#           scripts:
+#             "guard.sh":
+#               use_stdin: true
+#     Git names the refs being pushed only on stdin, and lefthook gives stdin to one job only,
+#     so keep every pre-push ref check in this one script.
+#
+# What gets past it, on purpose or not:
+#   - `git push --no-verify` (and LEFTHOOK=0 under lefthook) skips all hooks. Block --no-verify
+#     in each agent's permission rules; .claude/settings.json does for Claude Code.
+#   - `git push --mirror` from a clone with no local copy of a protected branch: git leaves that
+#     implicit delete off stdin, and a hook cannot tell that clone from a normal one. The deny
+#     rules block --mirror.
+#   - The allow variable. That is the deliberate path for the promotion script.
+#   So this hook is a guardrail, not access control. Back it with server-side branch protection
+#   where your host offers it.
+#
+# Self-test: tooling/test/checks.test.sh
+set -euo pipefail
+export LC_ALL=C
+
+tooling_dir="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../repo.conf
+. "$tooling_dir/repo.conf"
+check_subjects="$tooling_dir/check-commit-subjects.sh"
+
+zero_re='^0+$'
+status=0
+integration_sha=""
+integration_ref="refs/heads/${INTEGRATION_BRANCH}"
+tracking_ref="refs/remotes/${REMOTE}/${INTEGRATION_BRANCH}"
+allow_value="${!ALLOW_PROTECTED_PUSH_VAR:-}"
+
+# Let git classify paths, including names with spaces or glob characters.
+unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
+
+# Pathspecs from repo.conf. Generated files are code, even when their name looks like context.
+context_paths=()
+code_paths=(':/')
+generated_paths=()
+for path in "${CONTEXT_PATHS[@]}"; do
+  context_paths+=(":(top,glob)${path}")
+  code_paths+=(":(top,exclude,glob)${path}")
+done
+for path in ${GENERATED_PATHS[@]+"${GENERATED_PATHS[@]}"}; do
+  generated_paths+=(":(top,glob)${path}")
+  context_paths+=(":(top,exclude,glob)${path}")
+done
+
+# differs <a> <b> <pathspec...>: true when the two trees differ inside the pathspecs.
+differs() {
+  local rc=0
+  [ "$#" -gt 2 ] || return 1
+  git diff-tree -r --no-renames --quiet "$1" "$2" -- "${@:3}" || rc=$?
+  case "$rc" in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) echo "pre-push: git diff-tree failed ($rc); refusing the push." >&2; exit 1 ;;
+  esac
+}
+
+list_context() {
+  git diff-tree -r --no-renames --name-only "$1" "$2" -- "${context_paths[@]}" | sed 's/^/    /'
+}
+
+require_tracking() {
+  if ! git rev-parse --verify "${tracking_ref}^{commit}" >/dev/null 2>&1; then
+    echo "pre-push: ${REMOTE}/${INTEGRATION_BRANCH} is missing. Run git fetch ${REMOTE} and push again."
+    return 1
+  fi
+}
+
+is_protected() {
+  local branch
+  for branch in $PROTECTED_BRANCHES; do
+    [ "$1" = "refs/heads/${branch}" ] && return 0
+  done
+  return 1
+}
+
+while read -r _local_ref local_sha remote_ref remote_sha; do
+  if is_protected "$remote_ref"; then
+    if [ "$allow_value" = "1" ]; then
+      echo "pre-push: ${ALLOW_PROTECTED_PUSH_VAR}=1 is set, so this push may update ${remote_ref#refs/heads/}."
+    else
+      echo "pre-push: refused an update of ${remote_ref}. Agents never move a protected branch."
+      echo "pre-push: to land work, push to ${INTEGRATION_BRANCH}. A human promotes it with the promotion script."
+      status=1
+    fi
+    continue
+  fi
+
+  case "$remote_ref" in
+    "$integration_ref")
+      # A delete pushes no commits, so it has no context or subjects to check.
+      [[ "$local_sha" =~ $zero_re ]] && continue
+      if [[ "$remote_sha" =~ $zero_re ]]; then
+        # A new branch on the remote: inspect only commits no remote-tracking ref has yet.
+        range=("$local_sha" --not "--remotes=${REMOTE}")
+      elif git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+        range=("${remote_sha}..${local_sha}")
+      else
+        echo "pre-push: ${INTEGRATION_BRANCH} on the remote is at a commit this clone lacks. Run git fetch ${REMOTE} and push again."
+        status=1
+        continue
+      fi
+      # Inspect every new commit, including context edits reverted later in the same range.
+      # Combined merge diffs catch context changed against every parent (an "evil merge"),
+      # without counting reviewed context that a pull brings in from the remote parent.
+      if ! files=$(git log --format= --name-only --no-renames --root --full-history \
+        --diff-merges=combined "${range[@]}" -- "${context_paths[@]}"); then
+        echo "pre-push: could not inspect the commits to ${INTEGRATION_BRANCH}; refusing the push. Run git fetch ${REMOTE} first."
+        status=1
+        continue
+      fi
+      if [ -n "$files" ]; then
+        echo "pre-push: refused context changes on ${INTEGRATION_BRANCH}."
+        echo "  Move these files to a context/<topic> branch and open a PR for human review:"
+        printf '%s\n' "$files" | sed '/^$/d' | sort -u | sed 's/^/    /'
+        status=1
+      fi
+      bash "$check_subjects" "$remote_sha" "$local_sha" </dev/null || status=1
+      integration_sha="$local_sha"
+      ;;
+    refs/heads/*)
+      [[ "$local_sha" =~ $zero_re ]] && continue
+      if ! require_tracking; then
+        status=1
+        continue
+      fi
+      if ! base=$(git merge-base "$tracking_ref" "$local_sha"); then
+        echo "pre-push: this branch shares no history with ${REMOTE}/${INTEGRATION_BRANCH}. Fetch the full history and push again."
+        status=1
+        continue
+      fi
+      if differs "$base" "$local_sha" "${context_paths[@]}" &&
+        { differs "$base" "$local_sha" "${code_paths[@]}" ||
+          differs "$base" "$local_sha" ${generated_paths[@]+"${generated_paths[@]}"}; }; then
+        echo "pre-push: ${remote_ref#refs/heads/} mixes context and code."
+        echo "  Move these context files to a context/<topic> branch and open a separate PR for human review:"
+        list_context "$base" "$local_sha"
+        echo "  If ${INTEGRATION_BRANCH} moved, run git fetch ${REMOTE} first."
+        status=1
+      fi
+      ;;
+    # Tags and other refs pass.
+  esac
+done
+
+if [ -n "$integration_sha" ] && [ "$status" = 0 ]; then
+  if [ -z "$CHECK_COMMAND" ]; then
+    echo "pre-push: CHECK_COMMAND in tooling/repo.conf is empty, so no check ran before this push to ${INTEGRATION_BRANCH}."
+  else
+    if [ "$integration_sha" != "$(git rev-parse HEAD)" ]; then
+      echo "pre-push: note: the push to ${INTEGRATION_BRANCH} is ${integration_sha:0:12}, but HEAD is $(git rev-parse --short=12 HEAD)."
+      echo "pre-push: \`${CHECK_COMMAND}\` reads this working tree, not the pushed commit."
+    fi
+    echo "pre-push: a push to ${INTEGRATION_BRANCH} runs \`${CHECK_COMMAND}\`."
+    top="$(git rev-parse --show-toplevel)"
+    # Git exports GIT_DIR and friends to hooks (in a linked worktree too). They would point any
+    # temp repos the check creates at this one, so the check finds the repo from its directory.
+    # shellcheck disable=SC2046 # one variable name per word, on purpose
+    if ! (unset $(git rev-parse --local-env-vars) && cd "$top" && bash -c "$CHECK_COMMAND") </dev/null; then
+      echo "pre-push: refused the push to ${INTEGRATION_BRANCH}: \`${CHECK_COMMAND}\` failed (above). Fix it, commit, and push again."
+      status=1
+    fi
+  fi
+fi
+
+exit "$status"

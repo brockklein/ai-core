@@ -45,7 +45,7 @@ These are habits, not a checklist to recite:
 - **Simple tenses.** Present, past, or future simple.
 - **Start an instruction with its verb.** "Move the issue to In Progress."
 - **Keep the articles.** "Set the flag", not "Set flag".
-- **One word, one meaning, every time.** Pick the term and repeat it, even when repetition feels clumsy. A synonym reads as a second thing. Use the glossary's term (`AGENTS.md` → Glossary, then [`docs/glossary.md`](../../../docs/glossary.md)); when a term that will recur is missing, add a row there instead of coining it.
+- **One word, one meaning, every time.** Pick the term and repeat it, even when repetition feels clumsy. A synonym reads as a second thing. Use the term from [`docs/glossary.md`](../../../docs/glossary.md); when a term that will recur is missing, add an entry there instead of coining it.
 - **Noun clusters of three words at most.** Break longer ones with a preposition: "the auth token for the app", not "the app auth token store key".
 - **Say what to do.** A prohibition makes the reader hold the wrong action in mind, so give the target action. Keep "do not" for a real hazard.
 - **Short paragraphs.** Up to six sentences.
