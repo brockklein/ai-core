@@ -166,6 +166,14 @@ _run_tmpdir() {
   [[ -n "$_RUN_TMPDIR" ]] || _RUN_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/wizard-run.XXXXXX")"
 }
 
+# _run_pane_alive PANE_ID — true while that tmux pane exists and its command still runs. Reads the
+# whole list first: grep -q would close the pipe early, and pipefail would count tmux's SIGPIPE.
+_run_pane_alive() {
+  local panes nl=$'\n'
+  panes="$(tmux list-panes -a -F '#{pane_id} #{pane_dead}' 2>/dev/null)" || return 1
+  [[ "$nl$panes$nl" == *"$nl$1 0$nl"* ]]
+}
+
 # _run_in_tmux CMD — write CMD verbatim to step-N.sh (an EXIT-trap runner tail
 # captures its exit code to step-N.rc even if CMD calls exit, prints a green/red
 # "── exit <rc> ──" banner, and holds the pane open), run it in a tmux split from
@@ -173,7 +181,7 @@ _run_tmpdir() {
 # exit 0 returns success; non-zero drives the r/m/c/a menu (retry = fresh pane).
 # Only ever called from run_cmd, and only when already inside a tmux session.
 _run_in_tmux() {
-  local cmd="$1" dir script rcfile rc choice
+  local cmd="$1" dir script rcfile rc choice pane
   _run_tmpdir; dir="$_RUN_TMPDIR"
   while true; do
     _RUN_COUNTER=$((_RUN_COUNTER + 1))
@@ -194,19 +202,37 @@ TAIL
       printf '%s\n' "$cmd"
     } > "$script"
     chmod +x "$script"
-    if ! tmux split-window -h -c "$PWD" "bash $script"; then
+    # The pane's command is a shell line, so the path is quoted: TMPDIR may hold a space.
+    if ! pane="$(tmux split-window -h -P -F '#{pane_id}' -c "$PWD" "bash $(printf '%q' "$script")")" \
+      || [[ -z "$pane" ]]; then
       warn "couldn't open a tmux split — run it yourself in another terminal."
       pause
       return 0
     fi
     note "running in a tmux split — watch that pane; waiting for it to finish…"
-    while [[ ! -f "$rcfile" ]]; do sleep 1; done
-    rc="$(cat "$rcfile" 2>/dev/null || echo 1)"
+    # The runner writes the .rc file before it holds the pane open, so a pane that is gone (or dead)
+    # with no .rc file never reported, and waiting longer would wait forever.
+    while [[ ! -f "$rcfile" ]]; do
+      if ! _run_pane_alive "$pane"; then
+        sleep 1
+        [[ -f "$rcfile" ]] || break
+      fi
+      sleep 1
+    done
+    if [[ -f "$rcfile" ]]; then
+      rc="$(cat "$rcfile" 2>/dev/null || echo 1)"
+    else
+      rc="unknown"
+    fi
     if [[ "$rc" == 0 ]]; then
       printf '  %s✓ step succeeded (exit 0)%s\n' "$GREEN" "$RESET"
       return 0
     fi
-    printf '  %s✗ step FAILED (exit %s)%s\n' "$RED" "$rc" "$RESET"
+    if [[ "$rc" == unknown ]]; then
+      printf '  %s✗ step FAILED: its pane closed before reporting an exit code%s\n' "$RED" "$RESET"
+    else
+      printf '  %s✗ step FAILED (exit %s)%s\n' "$RED" "$rc" "$RESET"
+    fi
     while true; do
       printf '  %s? (r)etry · (m)anual · (c)ontinue anyway · (a)bort [r/m/c/a] %s' "$YELLOW" "$RESET"
       read -r choice || true
@@ -242,11 +268,41 @@ run_cmd() {
   fi
 }
 
-# _existing KEY — current value of KEY in ENV_FILE, if any.
+# _wiz_dotenv_value VALUE — print VALUE as the right-hand side of a dotenv line that dotenv and
+# Node's parseEnv read back unchanged. The grammar, first fit wins:
+#   bare            only A-Z a-z 0-9 and _ @ % + = : , . / -   (so no #, space, or quote)
+#   'single'        no ' inside (read literally)
+#   "double"        no " or \ inside (dotenv expands \n inside double quotes)
+#   `backtick`      no ` inside
+# Fails, printing nothing, for a value with a line break or with all three quote characters.
+_wiz_dotenv_value() {
+  local v="$1" bare='^[A-Za-z0-9_@%+=:,./-]*$' nl=$'\n' cr=$'\r'
+  case "$v" in *"$nl"*|*"$cr"*) return 1 ;; esac
+  if [[ "$v" =~ $bare ]]; then printf '%s' "$v"
+  elif [[ "$v" != *"'"* ]]; then printf "'%s'" "$v"
+  elif [[ "$v" != *'"'* && "$v" != *'\'* ]]; then printf '"%s"' "$v"
+  elif [[ "$v" != *'`'* ]]; then printf '`%s`' "$v"
+  else return 1
+  fi
+}
+
+# _existing KEY — current value of KEY in ENV_FILE, if any, read back by the same grammar: a quoted
+# value is what lies between its quotes; a bare one ends at a # and is trimmed, as dotenv reads it.
 _existing() {
   [[ -f "$ENV_FILE" ]] || return 1
-  local line; line=$(grep -E "^${1}=" "$ENV_FILE" | tail -n1) || return 1
-  printf '%s' "${line#*=}"
+  local line v q
+  line=$(grep -E "^${1}=" "$ENV_FILE" | tail -n1) || return 1
+  v="${line#*=}"
+  v="${v#"${v%%[![:space:]]*}"}"
+  q="${v:0:1}"
+  if [[ "$q" == "'" || "$q" == '"' || "$q" == '`' ]] && [[ "${v:1}" == *"$q"* ]]; then
+    v="${v:1}"
+    printf '%s' "${v%%"$q"*}"
+    return 0
+  fi
+  v="${v%%#*}"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "$v"
 }
 
 # ask KEY "Prompt" — read a value into $KEY. Offers the existing .env value as
@@ -299,10 +355,15 @@ _wiz_upsert() {
 }
 
 # write_env KEY VALUE — upsert KEY=VALUE into ENV_FILE (creates it; replaces
-# any existing line). Idempotent.
+# any existing line), quoted per _wiz_dotenv_value so it reads back unchanged. Idempotent. A value
+# that grammar can't hold (a line break) stops the wizard and leaves ENV_FILE as it was.
 write_env() {
-  local key="$1" value="$2"
-  _wiz_upsert "$ENV_FILE" "$key" "$value"
+  local key="$1" value="$2" quoted
+  if ! quoted="$(_wiz_dotenv_value "$value")"; then
+    warn "can't write $key to $ENV_FILE: the value has a line break (or all of ' \" \`), which one .env line can't hold."
+    exit 1
+  fi
+  _wiz_upsert "$ENV_FILE" "$key" "$quoted"
   WRITTEN_ENV+=("$key")
   printf '  %s✓ wrote%s %s → %s\n' "$GREEN" "$RESET" "$key" "$ENV_FILE"
 }

@@ -162,6 +162,8 @@ port_c="$(envval "$c" PORT)" port_d="$(envval "$d" PORT)"
 check "concurrent ups both succeed" "[ \"\$(cat $tmp/c.status)\$(cat $tmp/d.status)\" = 00 ]"
 check "concurrent ups get distinct ports" "[ $port_c != $port_d ] && [ $port_c != $port_a ] && [ $port_d != $port_a ]"
 expect 0 "list shows every task" "alpha .*gamma|delta" "$repo" bash -c "node tooling/task-env.mjs list | tr '\n' ' '"
+ln -s "$repo/tooling" "$tmp/tooling-link"
+expect 0 "runs when invoked through a symlinked path" "alpha" "$repo" node "$tmp/tooling-link/task-env.mjs" list
 
 echo "lock"
 lock="$repo/.git/task-env/lock"
@@ -175,6 +177,22 @@ expect 1 "waits on a live holder, then gives up naming it" "still held by pid $h
 kill "$holder"
 expect 0 "takes over a lock whose holder died" "Stopped" "$d" task stop
 check "lock released after a command" "[ ! -e $lock ]"
+# Two waiters find the same dead owner. The first recovers the lock and holds it for a whole up
+# (worktree c's service takes a second to listen); the second, held between seeing the dead owner
+# and recovering, must then wait for the first instead of taking the lock from it.
+sed -i.bak 's/"exec node -e/"sleep 1; exec node -e/' "$c/tooling/task-env.config.mjs" && rm "$c/tooling/task-env.config.mjs.bak"
+sleep 300 &
+holder=$!
+disown "$holder"
+mkdir "$lock"
+echo "$holder $(LC_ALL=C TZ=UTC ps -o lstart= -p "$holder" | sed 's/^ *//;s/ *$//')" >"$lock/owner"
+kill "$holder"
+(cd "$c" && task up gamma >"$tmp/race-a.out" 2>&1; echo $? >"$tmp/race-a.status") &
+(cd "$d" && TASK_ENV_TEST_STALE_PAUSE_MS=400 task stop >"$tmp/race-d.out" 2>&1; echo $? >"$tmp/race-d.status") &
+wait
+check "concurrent stale-lock recovery: both commands succeed" "[ \"\$(cat $tmp/race-a.status)\$(cat $tmp/race-d.status)\" = 00 ]"
+check "concurrent stale-lock recovery: the second waits for the first's fresh lock" "grep -q 'Waiting for another task-env command' $tmp/race-d.out"
+check "concurrent stale-lock recovery: lock released, no recovery leftovers" "[ -z \"\$(ls $repo/.git/task-env | grep -v leases.json)\" ]"
 
 # ---------------------------------------------------------------------------------------------
 echo "stop"
@@ -236,6 +254,40 @@ echo "client only"
 expect 0 "up --client-only" "client only" "$a" task up kappa --client-only
 check "no database for a client-only task" "[ ! -e $dbs/main_kappa ] && [ \"\$(envval $a DATABASE_URL)\" = file://$dbs/main ]"
 expect 0 "down a client-only task" "nothing is left" "$a" task down kappa
+
+echo "env files per service, and only inside the worktree"
+# Worktree e gets a second env file and a second service whose PORT lives there.
+node - "$e/tooling/task-env.config.mjs" "$((pool_first - 2))" <<'EOF'
+const fs = require('fs')
+const [file, port] = process.argv.slice(2)
+const api = `    {
+      name: 'api',
+      command: "exec node -e \\"require('http').createServer((q, s) => s.end('api')).listen(process.env.PORT)\\"",
+      cwd: '.',
+      env: { 'config/.env': { PORT: String } },
+      defaultPort: ${port},
+      readySeconds: 20,
+    },
+  ],`
+const text = fs.readFileSync(file, 'utf8')
+  .replace("envFiles: ['.env']", "envFiles: ['.env', 'config/.env']")
+  .replace(/\n  \],/, `\n${api}`)
+fs.writeFileSync(file, text)
+EOF
+mkdir "$repo/config"
+printf 'PORT=5999\n' >"$repo/config/.env"
+ln -s "$repo/config" "$e/config"
+e_env_before="$(cat "$e/.env")"
+expect 1 "up refuses an env file whose directory leads out of the worktree" "outside this worktree" "$e" task up epsilon
+check "the refusal changed no env file" "[ \"\$(cat $repo/config/.env)\" = PORT=5999 ] && [ \"\$(cat $e/.env)\" = \"\$e_env_before\" ]"
+check "the refusal took no lease or database" "! grep -q epsilon $repo/.git/task-env/leases.json && [ ! -e $dbs/main_epsilon ]"
+rm "$e/config"
+expect 0 "up with two services that both use PORT" "Task epsilon is up" "$e" task up epsilon
+port_web="$(envval "$e" PORT)" port_api="$(sed -n 's/^PORT=//p' "$e/config/.env")"
+check "each service gets the PORT from its own env file" "[ $port_web != $port_api ] && [ \"\$(answers $port_web)\" = \"$e\" ] && [ \"\$(answers $port_api)\" = api ]"
+check "main checkout's config/.env untouched" "[ \"\$(cat $repo/config/.env)\" = PORT=5999 ]"
+expect 0 "down epsilon" "nothing is left" "$e" task down epsilon
+check "down restores config/.env from the main checkout" "[ \"\$(cat $e/config/.env)\" = PORT=5999 ]"
 
 (cd "$d" && task down delta >/dev/null 2>&1)
 (cd "$c" && task down gamma >/dev/null 2>&1)

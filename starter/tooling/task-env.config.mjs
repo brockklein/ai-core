@@ -12,6 +12,12 @@
  *   engine doesn't guess whether a remote server is "probably a dev box".
  * - Keys this file names are the only ones `up` rewrites, and `down` puts each back to the main
  *   checkout's value (or removes it, when the main checkout has none).
+ * - Every env file named here must really live inside the worktree. `up` and `down` refuse, before
+ *   changing anything, when one is a symlink or sits under a directory that resolves elsewhere.
+ * - Each service starts with an environment of its own, so two services can each use PORT from
+ *   their own env file. Later wins: the shell, every envOverrides value, the task key and database
+ *   URL, every key `up` wrote to an env file the service names in `env`, then the service's own
+ *   `env` keys.
  */
 
 import { spawnSync } from 'node:child_process'

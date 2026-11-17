@@ -211,11 +211,25 @@ ran_check 'integration: the refused push ran the check' yes
 expect pass 'integration: good subjects and a passing check pass' git push origin dev
 same 'integration: the check ran once, without GIT_DIR' "$(cat "$CHECK_LOG")" 'check GIT_DIR=<unset>'
 : >"$CHECK_LOG"
+# The check reads the working tree, so it runs only when that tree is exactly the pushed commit.
 commit 'ABC-6: pushed'
 commit 'ABC-7: not pushed'
-expect pass 'integration: pushing a commit other than HEAD passes' git push origin HEAD~1:dev
-logged 'integration: and says the check reads the working tree' 'reads this working tree, not the pushed commit'
-ran_check 'integration: pushing a non-HEAD commit runs the check' yes
+expect fail 'integration: refuses a commit other than HEAD' git push origin HEAD~1:dev
+logged 'integration: and says to push HEAD' 'but HEAD is'
+ran_check 'integration: a non-HEAD push runs no check' no
+echo dirty >>file
+expect fail 'integration: refuses uncommitted changes to a tracked file' git push origin HEAD:dev
+logged 'integration: and names the file' ' M file'
+ran_check 'integration: a dirty push runs no check' no
+git checkout -q -- file
+echo new >untracked.ts
+expect fail 'integration: refuses an untracked file the check would read' git push origin HEAD:dev
+logged 'integration: and names it' '?? untracked.ts'
+rm untracked.ts
+echo ignored.out >.gitignore && git add .gitignore && commit 'ABC-7: ignore build output'
+echo built >ignored.out
+expect pass 'integration: an ignored file does not block the push' git push origin HEAD:dev
+ran_check 'integration: and the check ran' yes
 git worktree add -q "$tmp/linked" HEAD
 git -C "$tmp/linked" commit -q --no-verify --allow-empty -m 'ABC-8: from a linked worktree'
 expect pass 'linked worktree: an integration push passes' git -C "$tmp/linked" push origin HEAD:dev
@@ -347,6 +361,8 @@ expect fail 'links: explicit file with broken links fails' node "$links" docs/ba
 logged 'links: reports file:line and target' 'docs/bad.md:4: missing relative link target missing.md'
 logged 'links: reports reference definitions' 'docs/bad.md:6: missing relative link target ../gone.md'
 expect fail 'links: all tracked files includes the broken one' node "$links"
+ln -s "$links" "$tmp/links-link.mjs"
+expect fail 'links: runs when invoked through a symlinked path' node "$tmp/links-link.mjs" docs/bad.md
 git rm -q docs/bad.md && commit 'ABC-2: drop bad'
 expect pass 'links: all tracked files, clean' node "$links"
 expect fail 'links: a missing explicit file is an error' node "$links" nope.md
@@ -399,6 +415,8 @@ command = "docs-server"
 command = "npx"'
 expect fail 'mcp: a transport mismatch fails' node "$parity" "$tmp/p2"
 logged 'mcp: names the mismatch' '"docs" uses url in .mcp.json but command in .codex/config.toml'
+ln -s "$parity" "$tmp/parity-link.mjs"
+expect fail 'mcp: runs when invoked through a symlinked path' node "$tmp/parity-link.mjs" "$tmp/p2"
 mcp "$tmp/p3" '{"mcpServers": {"docs": {"url": "https://example.com/mcp"}}}' "$good_toml"
 expect fail 'mcp: a server missing from .mcp.json fails' node "$parity" "$tmp/p3"
 logged 'mcp: names the missing server' '"db" is in .codex/config.toml but not .mcp.json'
@@ -440,6 +458,12 @@ if [ -f "$fill_check" ]; then
   logged 'fill: finds the (optional) form' "$tmp/fill/opt.md:1:"
   if grep -q 'ignored' "$tmp/last.log"; then echo 'FAIL - fill: skips .git and node_modules'; failures=$((failures + 1)); else echo 'ok   - fill: skips .git and node_modules'; fi
   expect fail 'fill: a missing directory is a usage error' bash "$fill_check" "$tmp/nope"
+  mkdir -p "$tmp/fill-locked"
+  printf '# %s pick a branch\n' "$fill" >"$tmp/fill-locked/conf"
+  chmod 000 "$tmp/fill-locked/conf"
+  expect fail 'fill: a file it cannot read fails instead of passing' bash "$fill_check" "$tmp/fill-locked"
+  logged 'fill: and says it could not read every file' 'could not read'
+  chmod 644 "$tmp/fill-locked/conf"
 else
   echo "skip - check-fill-markers.sh is not beside this starter (${fill_check})"
 fi

@@ -14,7 +14,9 @@
 #      the context PR gets a real review instead of hiding inside a code diff.
 #   4. On a push to INTEGRATION_BRANCH: a bad commit subject in the pushed commits
 #      (tooling/check-commit-subjects.sh), then a failing CHECK_COMMAND. The check runs only when
-#      every ref check passed.
+#      every ref check passed. It reads the working tree, so the push is also refused unless the
+#      pushed commit is HEAD and nothing is uncommitted (tracked changes or untracked files; ignored
+#      files are fine): otherwise the check would pass or fail for code other than what is pushed.
 #
 # Install (pick one):
 #   git config core.hooksPath tooling/hooks
@@ -179,12 +181,25 @@ if [ -n "$integration_sha" ] && [ "$status" = 0 ]; then
   if [ -z "$CHECK_COMMAND" ]; then
     echo "pre-push: CHECK_COMMAND in tooling/repo.conf is empty, so no check ran before this push to ${INTEGRATION_BRANCH}."
   else
-    if [ "$integration_sha" != "$(git rev-parse HEAD)" ]; then
-      echo "pre-push: note: the push to ${INTEGRATION_BRANCH} is ${integration_sha:0:12}, but HEAD is $(git rev-parse --short=12 HEAD)."
-      echo "pre-push: \`${CHECK_COMMAND}\` reads this working tree, not the pushed commit."
+    top="$(git rev-parse --show-toplevel)"
+    head="$(git rev-parse HEAD)"
+    git -C "$top" update-index -q --refresh >/dev/null 2>&1 || true
+    if ! dirty="$(git -C "$top" status --porcelain --untracked-files=normal)"; then
+      echo "pre-push: could not read the working tree's status; refusing the push."
+      exit 1
+    fi
+    if [ "$integration_sha" != "$head" ] || [ -n "$dirty" ]; then
+      echo "pre-push: refused the push to ${INTEGRATION_BRANCH}: \`${CHECK_COMMAND}\` checks this working tree, so it must be exactly the pushed commit."
+      if [ "$integration_sha" != "$head" ]; then
+        echo "  The push is ${integration_sha:0:12}, but HEAD is ${head:0:12}. Check out the commit you mean to push, then push HEAD."
+      fi
+      if [ -n "$dirty" ]; then
+        echo "  Commit, stash, or remove these first (git stash -u stashes untracked files too):"
+        printf '%s\n' "$dirty" | sed 's/^/    /'
+      fi
+      exit 1
     fi
     echo "pre-push: a push to ${INTEGRATION_BRANCH} runs \`${CHECK_COMMAND}\`."
-    top="$(git rev-parse --show-toplevel)"
     # Git exports GIT_DIR and friends to hooks (in a linked worktree too). They would point any
     # temp repos the check creates at this one, so the check finds the repo from its directory.
     # shellcheck disable=SC2046 # one variable name per word, on purpose

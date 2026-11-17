@@ -56,7 +56,7 @@ import {
 } from 'node:fs'
 import { createServer } from 'node:net'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
 import config from './task-env.config.mjs'
 
@@ -180,9 +180,18 @@ export function rewriteEnv(text, updates) {
   return result
 }
 
+const lexists = (file) => {
+  try {
+    lstatSync(file)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** A reader, or a crash, sees the old file or the new one, never half of either. */
 function writeAtomic(file, text) {
-  if (existsSync(file) && lstatSync(file).isSymbolicLink()) {
+  if (lexists(file) && lstatSync(file).isSymbolicLink()) {
     // Writing through it would change the file it points to, likely the main checkout's.
     fail(`${file} is a symlink; give this worktree its own copy.`)
   }
@@ -192,8 +201,42 @@ function writeAtomic(file, text) {
   renameSync(temp, file)
 }
 
+/**
+ * Refuses an env file that is a symlink, or whose real path (every parent directory resolved
+ * through symlinks) lies outside the worktree: writing there would change another checkout's file,
+ * most likely the main checkout's. A path that doesn't exist yet is judged by its nearest existing
+ * parent, since `up` creates the rest inside it.
+ */
+function assertEnvDestinations(root, rels) {
+  for (const rel of rels) {
+    const file = path.resolve(root, rel)
+    if (lexists(file) && lstatSync(file).isSymbolicLink()) {
+      fail(`${rel} is a symlink; give this worktree its own copy.`)
+    }
+    let existing = file
+    const rest = []
+    while (!lexists(existing)) {
+      rest.unshift(path.basename(existing))
+      existing = path.dirname(existing)
+    }
+    let real
+    try {
+      real = path.join(realpathSync(existing), ...rest)
+    } catch {
+      fail(`${rel} leads through a broken symlink; give this worktree its own copy.`)
+    }
+    if (!isInside(real, root)) {
+      fail(`${rel} resolves to ${real}, outside this worktree; give this worktree its own copy.`)
+    }
+  }
+}
+
+/** Every env file `up` or `down` may write. */
+const envDestinations = () => [...new Set([...config.envFiles, ...Object.keys(managedKeys())])]
+
 function updateEnvFiles(root, updatesByFile) {
-  // Compute every file first, so a refusal leaves all of them untouched.
+  // Check every destination and compute every file first, so a refusal leaves all of them untouched.
+  assertEnvDestinations(root, Object.keys(updatesByFile))
   const writes = Object.entries(updatesByFile).map(([rel, updates]) => {
     const file = path.join(root, rel)
     const text = existsSync(file) ? readFileSync(file, 'utf8') : ''
@@ -398,48 +441,103 @@ function recordLeaders(ctx, name, leaders) {
   }
 }
 
+const ownerOf = (dir) => {
+  const match = /^(\d+) (.+)$/.exec(readFileSync(path.join(dir, 'owner'), 'utf8').trim())
+  return match ? { pid: Number(match[1]), started: match[2] } : undefined
+}
+const sameOwner = (a, b) => Boolean(a && b && a.pid === b.pid && a.started === b.started)
+const isDead = (owner) => startTimeOf(owner.pid) !== owner.started
+
+/** Removes a directory by renaming it aside first, so only this exact directory goes. */
+function removeDir(dir) {
+  const grave = `${dir}.grave-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  renameSync(dir, grave)
+  rmSync(grave, { recursive: true, force: true })
+}
+
+/**
+ * Creates `dir` holding an owner file naming `me`, and says whether this process made it. Written
+ * aside and renamed into place, so the directory never exists without its owner file.
+ */
+function claimDir(dir, me) {
+  const pending = `${dir}.pending-${process.pid}`
+  rmSync(pending, { recursive: true, force: true })
+  mkdirSync(pending)
+  writeFileSync(path.join(pending, 'owner'), `${me.pid} ${me.started}\n`)
+  try {
+    renameSync(pending, dir)
+    return true
+  } catch (err) {
+    rmSync(pending, { recursive: true, force: true })
+    if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(err.code)) throw err
+    return false
+  }
+}
+
+/**
+ * Removes `dir` if `stale`, an owner that has died, still holds it, and says whether it did.
+ * Recoveries from one dead owner are serialized by a claim directory named for that owner, and the
+ * owner is read again under the claim. So a waiter acting on what it saw earlier can't remove a
+ * lock that another waiter has since recovered and taken. A claim whose own holder died is
+ * recovered the same way.
+ */
+function evict(dir, stale, me) {
+  const claim = `${dir}.evict-${stale.pid}-${stale.started.replace(/\W+/g, '_')}`
+  if (!claimDir(claim, me)) {
+    let holder
+    try {
+      holder = ownerOf(claim)
+    } catch {
+      return false // released between our attempt and this read
+    }
+    if (holder && isDead(holder)) evict(claim, holder, me)
+    return false
+  }
+  try {
+    let current
+    try {
+      current = ownerOf(dir)
+    } catch {
+      return false // already gone
+    }
+    if (!sameOwner(current, stale)) return false
+    removeDir(dir)
+    return true
+  } finally {
+    removeDir(claim)
+  }
+}
+
 /**
  * Runs one up/stop/down at a time across every checkout of the repo, so a second `up` sees the
  * first one's ports. The lock is a directory created atomically, holding its owner's pid and start
- * time; a lock whose owner has died is taken over.
+ * time; a lock whose owner has died is recovered (see evict) and taken.
  */
 async function withLock(ctx, work) {
   const lock = path.join(ctx.commonDir, 'task-env', 'lock')
-  const ownerOf = (dir) => {
-    const match = /^(\d+) (.+)$/.exec(readFileSync(path.join(dir, 'owner'), 'utf8').trim())
-    return match ? { pid: Number(match[1]), started: match[2] } : undefined
-  }
-  const me = `${process.pid} ${startTimeOf(process.pid)}`
+  const me = { pid: process.pid, started: startTimeOf(process.pid) }
   mkdirSync(path.dirname(lock), { recursive: true })
   const deadline = Date.now() + LOCK_WAIT_SECONDS * 1000
 
   for (let announced = false; ; ) {
-    // Written aside and renamed into place, so the lock never exists without its owner file.
-    const pending = `${lock}.${process.pid}`
-    rmSync(pending, { recursive: true, force: true })
-    mkdirSync(pending)
-    writeFileSync(path.join(pending, 'owner'), `${me}\n`)
-    try {
-      renameSync(pending, lock)
-      break
-    } catch (err) {
-      rmSync(pending, { recursive: true, force: true })
-      if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(err.code)) throw err
-    }
+    if (claimDir(lock, me)) break
     let owner
     try {
       owner = ownerOf(lock)
     } catch {
-      continue // released between our rename and this read
+      continue // released between our attempt and this read
     }
-    if (owner && startTimeOf(owner.pid) !== owner.started) {
-      // Its owner died holding it. Move it aside first: a rename either takes this exact dir or
-      // fails, so two waiters can't both take over.
-      const grave = `${lock}.stale.${process.pid}`
-      try {
-        renameSync(lock, grave)
-        rmSync(grave, { recursive: true, force: true })
-      } catch {}
+    if (owner && isDead(owner)) {
+      // Lets the self-test hold one waiter between seeing a dead owner and recovering the lock.
+      if (Number(process.env.TASK_ENV_TEST_STALE_PAUSE_MS)) {
+        await sleep(Number(process.env.TASK_ENV_TEST_STALE_PAUSE_MS))
+      }
+      if (evict(lock, owner, me)) continue
+      // Another waiter is recovering it, or already has; look again shortly.
+      if (Date.now() > deadline) {
+        fail(`could not recover the task-env lock (${lock}) from pid ${owner.pid}, which died holding it.`)
+      }
+      await sleep(50)
       continue
     }
     if (!announced) {
@@ -454,9 +552,7 @@ async function withLock(ctx, work) {
     return await work()
   } finally {
     try {
-      if (readFileSync(path.join(lock, 'owner'), 'utf8').trim() === me) {
-        rmSync(lock, { recursive: true, force: true })
-      }
+      if (sameOwner(ownerOf(lock), me)) removeDir(lock)
     } catch {}
   }
 }
@@ -565,6 +661,8 @@ const tail = (file, lines) =>
 async function up(ctx, name, clientOnly) {
   assertName(name)
   if (!ctx.isWorktree) fail('run this in a worktree; the main checkout keeps the main stack.')
+  // Before anything changes, so a refusal leaves no lease, database, or env file behind.
+  assertEnvDestinations(ctx.root, envDestinations())
   const primary = path.join(ctx.root, primaryEnvFile())
   if (!existsSync(primary)) fail(`this worktree has no ${primaryEnvFile()}; run tooling/worktree-setup.sh.`)
 
@@ -654,9 +752,22 @@ async function up(ctx, name, clientOnly) {
     await copyDatabase(plan)
   }
 
-  // The env files win over the shell: an exported PORT would otherwise move a service.
-  const childEnv = { ...process.env }
-  for (const map of Object.values(updates)) Object.assign(childEnv, map)
+  // Each service's own environment, so two services can use the same key (PORT) from different
+  // files. Later wins: the shell, envOverrides, the task key and database URL, every key `up` wrote
+  // to an env file the service names, then the service's own keys. The env files win over the
+  // shell, since an exported PORT would otherwise move a service.
+  const envFor = (service) => {
+    const env = { ...process.env }
+    for (const map of Object.values(config.envOverrides ?? {})) Object.assign(env, map)
+    env[config.taskKey] = name
+    if (plan) env[config.database.urlKey] = plan.taskUrl
+    const own = Object.entries(service.env ?? {})
+    for (const [file] of own) Object.assign(env, updates[file])
+    for (const [file, map] of own) {
+      for (const key of Object.keys(map)) env[key] = updates[file][key]
+    }
+    return env
+  }
 
   const logPath = logPathOf(ctx.root)
   appendFileSync(logPath, `--- task-env up ${name} at ${new Date().toISOString()} ---\n`)
@@ -664,7 +775,7 @@ async function up(ctx, name, clientOnly) {
   try {
     for (const service of config.services) {
       if (clientOnly && !service.client) continue
-      leaders.push(await startService(ctx, service, childEnv))
+      leaders.push(await startService(ctx, service, envFor(service)))
       recordLeaders(ctx, name, leaders)
     }
     for (const service of active) {
@@ -706,6 +817,7 @@ async function down(ctx, name) {
   // The worktree the task ran in; may no longer exist.
   const worktree = isHere ? ctx.root : lease?.worktree
   const clientOnly = Boolean(lease?.clientOnly)
+  if (isHere) assertEnvDestinations(ctx.root, envDestinations())
 
   const problems = []
   const attempt = async (step) => {
@@ -832,7 +944,16 @@ async function main() {
   else fail(USAGE)
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+/** Whether this module is the script node was asked to run, compared by real path on both sides. */
+const isMain = () => {
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return false
+  }
+}
+
+if (isMain()) {
   main().catch((err) => {
     console.error(`task-env: ${err instanceof TaskError ? err.message : err.stack}`)
     process.exit(1)

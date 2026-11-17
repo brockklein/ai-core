@@ -23,7 +23,7 @@
  * Self-test: tooling/test/checks.test.sh
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -355,4 +355,13 @@ function main() {
   return 0
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = main()
+/** Whether this module is the script node was asked to run, compared by real path on both sides. */
+const isMain = () => {
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return false
+  }
+}
+
+if (isMain()) process.exitCode = main()

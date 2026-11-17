@@ -40,11 +40,18 @@ case "$1 ${2:-}" in
 esac
 echo "unexpected gh call: $*" >&2; exit 99
 STUB
-  # run_cmd only prints outside tmux. This tmux runs the step script (its last argument), so a test
-  # sees the exit-code gate work.
+  # run_cmd only prints outside tmux. This tmux's split-window runs the step command (its last
+  # argument) to the end, so a test sees the exit-code gate work; with $STATE/tmux_pane_dies it runs
+  # nothing, like a pane that closed before the step could report. list-panes lists no pane, since
+  # every pane this stub opens has already closed.
   cat > "$STUBS/tmux" <<'STUB'
 #!/usr/bin/env bash
-bash -c "${*: -1}" < /dev/null > /dev/null 2>&1 || true
+case "$1" in
+  split-window)
+    [[ " $* " == *" -P "* ]] && echo "%7"
+    [[ -f "$STATE/tmux_pane_dies" ]] || bash -c "${*: -1}" < /dev/null > /dev/null 2>&1 || true ;;
+esac
+exit 0
 STUB
   # open_url must never reach a real browser from a test.
   for browser in open xdg-open wslview; do printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBS/$browser"; done
@@ -63,11 +70,14 @@ new_repo() {
   write_stubs
 }
 
-# run_wiz STDIN SCRIPT ARGS… — run a wizard with the stubs. Sets OUT and RC.
+# run_wiz STDIN SCRIPT ARGS… — run a wizard with the stubs. Sets OUT and RC. A run still going after
+# WIZ_TIMEOUT seconds (default 30) is killed with SIGALRM (RC 142), so a wizard that waits forever
+# fails its test instead of hanging the suite. WIZ_TMPDIR overrides the run's TMPDIR.
 run_wiz() {
   local input="$1" script="$2"; shift 2
   OUT="$(cd "$WORK" && printf '%b' "$input" | PATH="$STUBS:$PATH" STATE="$STATE" HOME="$CASE_DIR/home" \
-    TMPDIR="$CASE_DIR/tmp" bash "$script" "$@" 2>&1)"
+    TMPDIR="${WIZ_TMPDIR:-$CASE_DIR/tmp}" perl -e 'alarm shift @ARGV; exec @ARGV or die' "${WIZ_TIMEOUT:-30}" \
+    bash "$script" "$@" 2>&1)"
   RC=$?
 }
 # leftover_tmp — any replacement file a run left beside .env.
@@ -98,6 +108,14 @@ if [[ "${SYNTH_MODE:-}" == exit0 ]]; then exit 0; fi
 if [[ "${SYNTH_MODE:-}" == redirect ]]; then { echo partial; false; } >> "$PWD/.env"; fi
 if [[ "${SYNTH_MODE:-}" == swap ]]; then _WIZ_SWAP_TMP="$(mktemp "$PWD/.env.tmp.XXXXXX")"; false; fi
 if [[ "${SYNTH_MODE:-}" == upsert ]]; then write_env NEW 1; write_env NEW 2; fi
+if [[ "${SYNTH_MODE:-}" == escape ]]; then
+  i=0
+  while IFS= read -r v <&3; do
+    i=$((i + 1)); write_env "V$i" "$v"
+    [[ "$(_existing "V$i")" == "$v" ]] || echo "MISMATCH V$i"
+  done 3< "$STATE/values"
+fi
+if [[ "${SYNTH_MODE:-}" == newline ]]; then write_env NL "$(printf 'a\nb')"; fi
 if [[ "${SYNTH_MODE:-}" == run ]]; then run_cmd "${SYNTH_CMD:-true}"; fi
 if [[ "${SYNTH_MODE:-}" == secret ]]; then set_secret S "$SECRET_VALUE"; set_var V public; fi
 if [[ "${SYNTH_MODE:-}" == flag ]] && wiz_flag --dry; then say "dry flag seen"; fi
@@ -234,6 +252,16 @@ env_tests() {
   SYNTH_MODE=upsert run_wiz '\n' "$s" --only 1
   chmod 600 "$WORK/.env"
   expect "write_env stops on an unreadable file, and keeps its values" '[[ $RC != 0 ]] && grep -q "^KEEP=" "$WORK/.env" && ! leftover_tmp'
+  printf '%s\n' 'abc#def' ' two  spaces ' "it's" 'say "hi"' "it's \"both\"" 'back\slash' 'plain-1.2' '$HOME' '' > "$STATE/values"
+  SYNTH_MODE=escape run_wiz '\n' "$s" --only 1
+  expect "write_env values read back unchanged by _existing" '[[ $RC == 0 ]] && ! has MISMATCH'
+  expect "write_env values read back unchanged by a dotenv parser" 'node -e "
+    const fs = require(\"fs\"), { parseEnv } = require(\"util\")
+    const want = fs.readFileSync(process.argv[1], \"utf8\").split(\"\\n\").slice(0, -1)
+    const env = parseEnv(fs.readFileSync(process.argv[2], \"utf8\"))
+    process.exit(want.every((v, i) => env[\"V\" + (i + 1)] === v) ? 0 : 1)" "$STATE/values" "$WORK/.env"'
+  SYNTH_MODE=newline run_wiz '\n' "$s" --only 1
+  expect "write_env refuses a value with a newline, and writes nothing" '[[ $RC != 0 ]] && ! grep -q "^NL=" "$WORK/.env" && ! grep -qx "b" "$WORK/.env"'
 }
 
 gh_tests() {
@@ -273,6 +301,13 @@ run_cmd_tests() {
   SYNTH_MODE=run SYNTH_CMD='exit 4' TMUX=stub run_wiz '\ny\na\n' "$s" --only 1
   expect "abort stops the wizard" '[[ $RC == 1 ]] && has "aborting"'
   expect "run_cmd leaves no scratch dir" '[[ -z "$(find "$CASE_DIR/tmp" -name "wizard-run.*")" ]]'
+  mkdir -p "$CASE_DIR/tmp with space"
+  WIZ_TMPDIR="$CASE_DIR/tmp with space" SYNTH_MODE=run SYNTH_CMD='touch ran' TMUX=stub run_wiz '\ny\n' "$s" --only 1
+  expect "a TMPDIR with a space still runs the step" '[[ $RC == 0 && -f $WORK/ran ]] && has "step succeeded"'
+  rm -f "$WORK/ran"; touch "$STATE/tmux_pane_dies"
+  SYNTH_MODE=run SYNTH_CMD='touch ran' TMUX=stub WIZ_TIMEOUT=15 run_wiz '\ny\nc\n' "$s" --only 1
+  rm -f "$STATE/tmux_pane_dies"
+  expect "a pane that closes without an exit code is a failure, not a wait forever" '[[ $RC == 0 ]] && has "closed before" && has "continuing despite"'
 }
 
 example_tests() {

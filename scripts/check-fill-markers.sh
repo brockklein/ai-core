@@ -9,7 +9,8 @@
 #   [[FILL             e.g. [[FILL]] or [[FILL: project name]] in Markdown templates
 # Prints file:line: text for each, skipping .git, node_modules and binary files.
 #
-# Exit: 0 when none remain, 1 when any remain, 2 on a usage error.
+# Exit: 0 when none remain, 1 when any remain, 2 on a usage error or when a file can't be read
+# (an unread file could hold a marker, so it never counts as clean).
 #
 # Why: the starter's files are templates. A placeholder left behind reads to an agent as a real
 # instruction ("run `[[FILL: task runner]] check`") or leaves a guardrail on a guessed default.
@@ -23,8 +24,14 @@ fi
 
 pattern='FILL( \([^)]*\))?:|\[\[FILL'
 
-# grep exits 1 when nothing matches, which is the passing case here.
-matches="$(grep -rnIE --exclude-dir=.git --exclude-dir=node_modules -- "$pattern" "$1" || true)"
+# grep exits 0 on a match, 1 on none (the passing case), and 2 when it could not read something.
+rc=0
+matches="$(grep -rnIE --exclude-dir=.git --exclude-dir=node_modules -- "$pattern" "$1")" || rc=$?
+if [ "$rc" -gt 1 ]; then
+  [ -n "$matches" ] && printf '%s\n' "$matches" | sed -E 's/^([^:]*:[0-9]+:)[[:space:]]*/\1 /'
+  echo "error: could not read every file under $1 (grep's errors are above)." >&2
+  exit 2
+fi
 
 if [ -z "$matches" ]; then
   echo "No FILL markers remain under $1."
