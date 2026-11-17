@@ -14,6 +14,8 @@ You can assume that all agents from any provider are working within T3 Code. Thi
 
 Put your own thread ID (`parentThreadId` from `orchestrator_capabilities`) in every brief. Whenever a subagent needs to ask you something, it sends the question to that thread with `t3_thread_send` and waits for your answer. It does not end its turn with the question unanswered.
 
+Every brief you send with `t3_thread_send` ends by telling the subagent to send its result to your thread with `t3_thread_send` before it ends its turn. A follow-up run of a child whose `delegate_task` has already finished does not wake you when it ends; only its message does.
+
 Things you should NOT do:
 
 - write code
@@ -146,7 +148,7 @@ When the human requesting the work is away, such as overnight:
 - work one issue at a time
 - wait out a usage limit rather than stop
 - collect questions in a scratch file outside the repo, keep working on what they don't block, and hand them over together
-- after any long wait on a pull request or CI, read its state directly; a watch that wakes only when the overall result changes can stay silent behind a check that was already red
+- after any long wait, read the state directly: the pull request and its checks, or the subagent's thread. A watch that wakes only when the overall result changes stays silent behind a check that was already red, and a subagent that forgets to message you leaves you waiting
 
 ## Allocating environments
 

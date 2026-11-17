@@ -43,7 +43,11 @@ The coordinator copies a checklist into its reply and keeps it current. Steps 2 
 - **Tear down attempts only after synthesis is applied.** The base implementer may need to read code from the other attempts.
 - **After synthesis, review findings go to the base implementer,** who owns the final change and every fix, including fixes to code taken from other attempts. The synthesizer has no review duties.
 - **The first brief to a new worktree agent is "report your directory, start nothing, and end your turn".** The harness starts the child as soon as setup finishes, before the coordinator has assigned ports or a database.
-- **Watch for missed wakes.** A coordinator waiting on a pull request or CI can sit idle when a watch fires only on a change of overall state. For example, a check that is already red can hide the later results. After a long wait, read the state directly instead of trusting the watch.
+- **Make sure something wakes the coordinator.** A coordinator that ends its turn to wait sits idle until something wakes it, and two waits can fail silently:
+  - **A follow-up to a finished subagent.** When the coordinator sends a new brief to a child whose first run already ended, the child's next turn ending wakes no one. Every brief therefore ends with "send your result to the coordinator's thread".
+  - **A pull request watch.** A watch that fires only when the overall result changes stays silent once a check is red, so later results never arrive.
+
+  After a long wait, read the state directly instead of trusting the wake.
 - **Unattended runs need defaults.** For an overnight run, decide in advance: one issue at a time, wait out usage limits rather than stop, run CI's checks locally if CI minutes run out, and collect questions for the person in a scratch file outside the repo.
 - **Run one coordinator at a time per project.** Several coordinators would need a shared registry of leases and devices. The environment manager's lock protects ports, but not plans.
 - **Fix it now.** Don't defer a fix in the hope that the agent working a later issue will notice the same problem.
