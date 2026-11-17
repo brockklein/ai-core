@@ -188,6 +188,18 @@ if [ -n "$integration_sha" ] && [ "$status" = 0 ]; then
       echo "pre-push: could not read the working tree's status; refusing the push."
       exit 1
     fi
+    # assume-unchanged (lowercase tag) and skip-worktree (S) hide working-tree edits from status.
+    if ! flags="$(git -C "$top" ls-files -v)"; then
+      echo "pre-push: could not read the index; refusing the push."
+      exit 1
+    fi
+    hidden="$(printf '%s\n' "$flags" | grep -E '^([a-z]|S) ' | cut -c3- || true)"
+    if [ -n "$hidden" ]; then
+      echo "pre-push: refused the push to ${INTEGRATION_BRANCH}: these files are marked assume-unchanged or skip-worktree, so status can't prove the check sees the pushed commit:"
+      printf '%s\n' "$hidden" | sed 's/^/    /'
+      echo "  Clear the flags (git update-index --no-assume-unchanged --no-skip-worktree <file>), or push from a checkout without them."
+      exit 1
+    fi
     if [ "$integration_sha" != "$head" ] || [ -n "$dirty" ]; then
       echo "pre-push: refused the push to ${INTEGRATION_BRANCH}: \`${CHECK_COMMAND}\` checks this working tree, so it must be exactly the pushed commit."
       if [ "$integration_sha" != "$head" ]; then

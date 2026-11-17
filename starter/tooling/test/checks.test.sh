@@ -226,6 +226,15 @@ echo new >untracked.ts
 expect fail 'integration: refuses an untracked file the check would read' git push origin HEAD:dev
 logged 'integration: and names it' '?? untracked.ts'
 rm untracked.ts
+for flag in --assume-unchanged --skip-worktree; do
+  echo hidden >>file
+  git update-index "$flag" file
+  expect fail "integration: refuses a file marked ${flag#--}" git push origin HEAD:dev
+  logged "integration: and names the ${flag#--} file" '    file'
+  ran_check "integration: a ${flag#--} push runs no check" no
+  git update-index "--no${flag#-}" file
+  git checkout -q -- file
+done
 echo ignored.out >.gitignore && git add .gitignore && commit 'ABC-7: ignore build output'
 echo built >ignored.out
 expect pass 'integration: an ignored file does not block the push' git push origin HEAD:dev
