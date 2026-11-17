@@ -63,7 +63,7 @@ The most common defect is a change that works on the path you tested and is miss
 
 ## Documentation and context
 
-Most code changes need no documentation change. Agents can read the code, and a codebase legible enough to need no documentation beats a well-documented one.
+Most code changes need no documentation change. Agents can read the code.
 
 When something trips you up, prevent the recurrence before you move on. Use the first rung that works, and when you reach rung 4, say in the PR or handoff why rungs 1 and 2 did not fit:
 
